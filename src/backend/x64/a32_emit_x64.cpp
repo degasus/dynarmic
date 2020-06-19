@@ -1025,8 +1025,10 @@ void A32EmitX64::ReadMemory(A32EmitContext& ctx, IR::Inst* inst) {
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
     if (const auto marker = ShouldFastmem(ctx, inst)) {
+        const auto src_ptr = r13 + vaddr;
+
         const auto location = code.getCurr();
-        EmitReadMemoryMov<bitsize>(code, value, r13 + vaddr);
+        EmitReadMemoryMov<bitsize>(code, value, src_ptr);
 
         fastmem_patch_info.emplace(
             Common::BitCast<u64>(location),
@@ -1038,20 +1040,19 @@ void A32EmitX64::ReadMemory(A32EmitContext& ctx, IR::Inst* inst) {
         );
 
         ctx.reg_alloc.DefineValue(inst, value);
-        return;
+    } else {
+        Xbyak::Label abort, end;
+
+        const auto src_ptr = EmitVAddrLookup(code, ctx, bitsize, abort, vaddr);
+        EmitReadMemoryMov<bitsize>(code, value, src_ptr);
+        code.L(end);
+
+        code.SwitchToFarCode();
+        code.L(abort);
+        code.call(wrapped_fn);
+        code.jmp(end, code.T_NEAR);
+        code.SwitchToNearCode();
     }
-
-    Xbyak::Label abort, end;
-
-    const auto src_ptr = EmitVAddrLookup(code, ctx, bitsize, abort, vaddr);
-    EmitReadMemoryMov<bitsize>(code, value, src_ptr);
-    code.L(end);
-
-    code.SwitchToFarCode();
-    code.L(abort);
-    code.call(wrapped_fn);
-    code.jmp(end, code.T_NEAR);
-    code.SwitchToNearCode();
 
     ctx.reg_alloc.DefineValue(inst, value);
 }
@@ -1072,8 +1073,10 @@ void A32EmitX64::WriteMemory(A32EmitContext& ctx, IR::Inst* inst) {
     const auto wrapped_fn = write_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
     if (const auto marker = ShouldFastmem(ctx, inst)) {
+        const auto dest_ptr = r13 + vaddr;
+
         const auto location = code.getCurr();
-        EmitWriteMemoryMov<bitsize>(code, r13 + vaddr, value);
+        EmitWriteMemoryMov<bitsize>(code, dest_ptr, value);
 
         fastmem_patch_info.emplace(
             Common::BitCast<u64>(location),
@@ -1083,21 +1086,19 @@ void A32EmitX64::WriteMemory(A32EmitContext& ctx, IR::Inst* inst) {
                 *marker,
             }
         );
+    } else {
+        Xbyak::Label abort, end;
 
-        return;
+        const auto dest_ptr = EmitVAddrLookup(code, ctx, bitsize, abort, vaddr);
+        EmitWriteMemoryMov<bitsize>(code, dest_ptr, value);
+        code.L(end);
+
+        code.SwitchToFarCode();
+        code.L(abort);
+        code.call(wrapped_fn);
+        code.jmp(end, code.T_NEAR);
+        code.SwitchToNearCode();
     }
-
-    Xbyak::Label abort, end;
-
-    const auto dest_ptr = EmitVAddrLookup(code, ctx, bitsize, abort, vaddr);
-    EmitWriteMemoryMov<bitsize>(code, dest_ptr, value);
-    code.L(end);
-
-    code.SwitchToFarCode();
-    code.L(abort);
-    code.call(wrapped_fn);
-    code.jmp(end, code.T_NEAR);
-    code.SwitchToNearCode();
 }
 
 void A32EmitX64::EmitA32ReadMemory8(A32EmitContext& ctx, IR::Inst* inst) {
